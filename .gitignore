@@ -2,6 +2,7 @@ LICENSE
 .Rproj.user/
 .Rbuildignore
 .Rhistory
+man/
 
 # Windows image file caches
 Thumbs.db

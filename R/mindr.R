@@ -8,6 +8,7 @@
 #' @param backup logical. Whether the existing target file, if any, should be saved as backup.
 #' @param bookdown_style logical. whether the markdown files are in bookdown style, i.e. index.Rmd at the beginning, `# (PART)`, `# (APPENDIX)` and `# References` as an upper level of normal `#` title
 #' @param keep_eq logical. whether to keep LaTeX equations.
+#' @param method "regexpr" uses regular expressions, 'pandoc' uses pandoc to find the headings.
 #'
 #' @return a mindmap file, which can be viewed by common mindmap software, such as 'FreeMind' (<http://freemind.sourceforge.net/wiki/index.php/Main_Page>) and 'XMind' (<http://www.xmind.net>).
 #' @export
@@ -22,15 +23,18 @@ md2mm <- function(pattern = '*.[R]*md$',
                   savefilename = NA,
                   backup = TRUE,
                   bookdown_style = TRUE,
-                  keep_eq = FALSE) {
+                  keep_eq = FALSE,
+                  method = c('regexpr', 'pandoc')) {
   if (dir.exists(path)) {
+    method <- match.arg(method)
     header <- outline(
       path = path,
       pattern = pattern,
       remove_curly_bracket = remove_curly_bracket,
       savefile = FALSE,
       bookdown_style = bookdown_style,
-      keep_eq = keep_eq
+      keep_eq = keep_eq,
+      method = method
     )
     foldername <- get_foldername(path)
     if (is.na(title))
@@ -95,6 +99,8 @@ mm2md <- function(pattern = '*.mm$',
       paste(sapply(node_level - 1, function(x)
         paste0(rep('#', x), collapse = '')), headers)
     md[1] <- paste('Title:', md[1])
+    md <- gsub('&amp;', '&', md)
+    md <- gsub('&quot;', '"', md)
     if (savefile) {
       writeLines2(text = md,
                   filename = savefilename,
@@ -116,6 +122,7 @@ mm2md <- function(pattern = '*.mm$',
 #' @param pattern an optional regular expression for filtering the input files. See `help(dir)`.
 #' @param bookdown_style logical. whether the markdown files are in bookdown style, i.e. index.Rmd at the beginning, `# (PART)`, `# (APPENDIX)` and `# References` as an upper level of normal `#` title
 #' @param keep_eq logical. whether to keep LaTeX equations.
+#' @param method "regexpr" uses regular expressions, 'pandoc' uses pandoc to find the headings.
 #'
 #' @return a vector of strings showing outline of a markdown document or book.
 #' @export
@@ -130,8 +137,10 @@ outline <- function(pattern = '*.[R]*md',
                     savefilename = 'outline.md',
                     backup = TRUE,
                     bookdown_style = TRUE,
-                    keep_eq = FALSE) {
+                    keep_eq = FALSE,
+                    method = c('regexpr', 'pandoc')) {
   if (dir.exists(path)) {
+    method <- match.arg(method)
     # read data
     md <- NULL
     files <- dir(path, pattern = pattern, full.names = TRUE)
@@ -145,52 +154,64 @@ outline <- function(pattern = '*.[R]*md',
       md <- c(md, readLines(filename, encoding = 'UTF-8'))
     mdlength <- length(md)
 
-    # exclude the code blocks
-    codeloc2 <- grep('^````', md)
-    if (length(codeloc2) > 0)
-      md <- md[!sapply(1:mdlength, rmvcode, loc = codeloc2)]
-    codeloc <- grep('^```', md)
-    if (length(codeloc) > 0)
-      md <- md[!sapply(1:mdlength, rmvcode, loc = codeloc)]
+    if(method =='pandoc') {
+      temptxt <- 'mimdrtemp.tmp'
+      writeLines(md, temptxt, useBytes = TRUE)
+      md <- system2('pandoc', c('-f', 'markdown', '-t', 'json', temptxt), stdout = TRUE)
+      file.remove(temptxt)
+      md <- jsonlite::fromJSON(txt = md)
+      md <- md$blocks$c
+      header <- paste(
+        sapply(sapply(md, function(x) x[[1]][1]), function(x) paste(rep('#', x), collapse = '')),
+        sapply(md, function(x) x[[2]][[1]][1])
+      )
+    } else {
+      # exclude the code blocks
+      codeloc2 <- grep('^````', md)
+      if (length(codeloc2) > 0)
+        md <- md[!sapply(1:mdlength, rmvcode, loc = codeloc2)]
+      codeloc <- grep('^```', md)
+      if (length(codeloc) > 0)
+        md <- md[!sapply(1:mdlength, rmvcode, loc = codeloc)]
 
-    # get the outline
-    headerloc <- get_heading(text = md)
+      # get the outline
+      headerloc <- get_heading(text = md)
 
-    # remove the curly brackets
-    if (remove_curly_bracket)
-      md[headerloc] <- gsub(pattern = '\\{.*\\}', '', md[headerloc])
+      # remove the curly brackets
+      if (remove_curly_bracket)
+        md[headerloc] <- gsub(pattern = '\\{.*\\}', '', md[headerloc])
 
-    # remove the heading marker, which is eight '-' at the end of a heading
-    md[headerloc] <- gsub(pattern = ' --------$', '', md[headerloc])
+      # remove the heading marker, which is eight '-' at the end of a heading
+      md[headerloc] <- gsub(pattern = ' --------$', '', md[headerloc])
 
-    # extract equations
-    if (keep_eq) {
-      eq_begin <- grep('^\\$\\$', md)
-      eq_end <- grep('\\$\\$$', md)
-      eq_loc <- get_eqloc(eq_begin, eq_end)
-      headerloc <- c(headerloc, eq_loc)
-      headerloc <- headerloc[order(headerloc)]
-    }
-    header <- md[headerloc]
+      # extract equations
+      if (keep_eq) {
+        eq_begin <- grep('^\\$\\$', md)
+        eq_end <- grep('\\$\\$$', md)
+        eq_loc <- get_eqloc(eq_begin, eq_end)
+        headerloc <- c(headerloc, eq_loc)
+        headerloc <- headerloc[order(headerloc)]
+      }
+      header <- md[headerloc]
 
-    # lower the levels after `# (PART)` and `# (APPENDIX)`
-    if (bookdown_style) {
-      part_loc <-
-        c(
-          grep('^# \\(PART\\)', header),
-          grep('^# \\(APPENDIX\\)', header),
-          grep('^# References', header)
-        )
-      if (length(part_loc) > 0) {
-        header[part_loc] <- gsub(' \\(PART\\)', '', header[part_loc])
-        header[part_loc] <-
-          gsub(' \\(APPENDIX\\)', '', header[part_loc])
-        lower_loc <- (part_loc[1] + 1):length(header)
-        lower_loc <- lower_loc[!lower_loc %in% part_loc]
-        header[lower_loc] <- paste0('#', header[lower_loc])
+      # lower the levels after `# (PART)` and `# (APPENDIX)`
+      if (bookdown_style) {
+        part_loc <-
+          c(
+            grep('^# \\(PART\\)', header),
+            grep('^# \\(APPENDIX\\)', header),
+            grep('^# References', header)
+          )
+        if (length(part_loc) > 0) {
+          header[part_loc] <- gsub(' \\(PART\\)', '', header[part_loc])
+          header[part_loc] <-
+            gsub(' \\(APPENDIX\\)', '', header[part_loc])
+          lower_loc <- (part_loc[1] + 1):length(header)
+          lower_loc <- lower_loc[!lower_loc %in% part_loc]
+          header[lower_loc] <- paste0('#', header[lower_loc])
+        }
       }
     }
-
     # save file
     if (savefile) {
       writeLines2(
@@ -235,15 +256,18 @@ markmap <- function(root = NA,
                     height = NULL,
                     elementId = NULL,
                     options = markmapOption(),
-                    bookdown_style = TRUE) {
+                    bookdown_style = TRUE,
+                    method = c('regexpr', 'pandoc')) {
   input <- match.arg(input)
   if (!is.na(path) & dir.exists(path)) {
     if (input == '.md') {
+      method <- match.arg(method)
       header <- outline(
         path = path,
         remove_curly_bracket = remove_curly_bracket,
         savefile = FALSE,
-        bookdown_style = bookdown_style
+        bookdown_style = bookdown_style,
+        method = method
       )
       header <- paste0('#', header)
       header <-
@@ -416,6 +440,7 @@ mdtxt2mmtxt <-
     }
 
     mmtxt <- gsub(pattern = '&', '&amp;', mmtxt2)
+    mmtxt <- gsub(pattern = '"', '&quot;', mmtxt)
     ncc <-
       sapply(mmtxt, function(x)
         nchar(strsplit(x, split = ' ')[[1]][1])) # level of the headings

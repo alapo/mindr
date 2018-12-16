@@ -125,6 +125,7 @@ Still being developed. Feel free to give your feedback to me!
 
 ## Updates
 
+- 2018-12-16. **v1.1.9**. Added an option of 'pandoc' to extract headings.
 - 2018-11-10. **v1.1.8**. Adapted to the roxygen style when conversion between .R scripts and .Rmd documents.
 - 2018-10-26. **v1.1.7**. Conversion between .R scripts and .Rmd documents.
 - 2018-10-21. **v1.1.6**. Support LaTeX equations.
